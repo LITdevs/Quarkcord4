@@ -122,6 +122,7 @@ public class QuarkcordPlugin : IPlugin
             _client.MessageReceived += DiscordMessageReceived;
             _client.MessageUpdated += DiscordMessageUpdated;
             _client.MessageDeleted += DiscordMessageDeleted;
+            _client.ReactionAdded += DiscordReactionAdded;
             
             eventBus.Subscribe<MessageCreateEvent>(LqMessageReceived);
             eventBus.Subscribe<MessageDeleteEvent>(LqMessageDeleted);
@@ -129,7 +130,7 @@ public class QuarkcordPlugin : IPlugin
             await _client.StartAsync();
         });
     }
-
+    
     private async void LqMessageDeleted(MessageDeleteEvent deleteEvent)
     {
         if (_bridgeChannels.All(bc => bc.LqId != deleteEvent.Message.ChannelId)) return;
@@ -208,6 +209,49 @@ public class QuarkcordPlugin : IPlugin
         }
     }
     
+    
+    private async Task DiscordReactionAdded(Cacheable<IUserMessage, ulong> messageParam,
+        Cacheable<IMessageChannel, ulong> channelParam, SocketReaction reactionParam)
+    {
+        if (_bridgeChannels.All(bc => bc.DiscordId != channelParam.Id)) return;
+        var bridgeChannel = _bridgeChannels.Find(bc => bc.DiscordId == channelParam.Id);
+        var discordMessageId = messageParam.Id;
+        var messagePairCursor = await MessagePairs.FindAsync(m => m.DiscordId == discordMessageId);
+        var messagePair = await messagePairCursor.FirstOrDefaultAsync();
+        if (messagePair == null) return;
+        var message = await messageParam.DownloadAsync();
+        
+        var specialAttributes = new JArray
+        {
+            new JObject
+            {
+                ["type"] = "reply",
+                ["replyTo"] = messagePair.LqId.ToString()
+            }
+        };
+        
+        _eventBus.Publish(new CreateMessageMessage
+        {
+            Message = new LqMessage
+            {
+                VirtualAuthors = [_user!],
+                ChannelId = bridgeChannel!.LqId,
+                Id = ObjectId.GenerateNewId(),
+                AuthorId = _user!.Id,
+                Content = $"{(reactionParam.User.GetValueOrDefault() as SocketGuildUser)?.Nickname 
+                             ?? reactionParam.User.GetValueOrDefault().GlobalName 
+                             ?? reactionParam.User.GetValueOrDefault().Username 
+                             ?? "Someone"} reacted with {reactionParam.Emote}",
+                UserAgent = "Quarkcord",
+                Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds(),
+                Edited = false,
+                Attachments = [],
+                SpecialAttributes = specialAttributes
+                
+            }
+        });
+    }
+    
     private async Task DiscordMessageDeleted(Cacheable<IMessage, ulong> messageParam, Cacheable<IMessageChannel, ulong> channelParam)
     {
         if (_bridgeChannels.All(bc => bc.DiscordId != channelParam.Id)) return;
@@ -232,7 +276,7 @@ public class QuarkcordPlugin : IPlugin
             new JObject
             {
                 ["type"] = "botMessage",
-                ["username"] = (message.Author as SocketGuildUser)?.Nickname ?? message.Author.GlobalName,
+                ["username"] = (message.Author as SocketGuildUser)?.Nickname ?? message.Author.GlobalName ?? message.Author.Username,
                 ["avatarUri"] = $"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(message.Author.GetAvatarUrl())}"
             }
         };
