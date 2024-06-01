@@ -6,4 +6,15 @@
         <Nullable>enable</Nullable>
     </PropertyGroup>
 
+    <ItemGroup>
+      <PackageReference Include="Discord.Net" Version="3.15.0" />
+      <PackageReference Include="Lightquark.Types" Version="2024.6.1-57" />
+      <PackageReference Include="MongoDB.Driver" Version="2.25.0" />
+    </ItemGroup>
+
+
+    <Target Name="PostBuild" AfterTargets="Build" Condition="Exists('local.build')">
+        <Copy SourceFiles="$(TargetDir)$(TargetFileName)" DestinationFolder="C:\Users\emi\AppData\Roaming\lightquark\plugins" />
+    </Target>
+
 </Project>
