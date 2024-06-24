@@ -277,7 +277,7 @@ public class QuarkcordPlugin : IPlugin
             {
                 ["type"] = "botMessage",
                 ["username"] = (message.Author as SocketGuildUser)?.Nickname ?? message.Author.GlobalName ?? message.Author.Username,
-                ["avatarUri"] = $"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(message.Author.GetAvatarUrl())}"
+                ["avatarUri"] = $"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(message.Author.GetDisplayAvatarUrl())}"
             }
         };
         if (message.ReferencedMessage != null)
