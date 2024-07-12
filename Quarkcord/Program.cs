@@ -313,7 +313,7 @@ public class QuarkcordPlugin : IPlugin
             Url = new Uri($"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(a.Url)}")
         }).ToArray();
         LqMessage lqMessage;
-        if (message.Attachments.Count == 0 && message.CleanContent.Length == 0)
+        if (message.Attachments.Count == 0 && message.Content.Length == 0)
         {
             specialAttributes.Add(new JObject
             {
@@ -348,7 +348,7 @@ public class QuarkcordPlugin : IPlugin
             {
                 Id = lqMessageId,
                 AuthorId = _user!.Id,
-                Content = message.CleanContent,
+                Content = message.Content,
                 ChannelId = bridgeChannel!.LqId,
                 UserAgent = "Quarkcord",
                 Timestamp = message.Timestamp.ToUnixTimeMilliseconds(),
