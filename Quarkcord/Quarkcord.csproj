@@ -8,8 +8,8 @@
 
     <ItemGroup>
       <PackageReference Include="Discord.Net" Version="3.16.0" />
-      <PackageReference Include="Lightquark.Types" Version="2024.9.18.148" />
-      <PackageReference Include="MongoDB.Driver" Version="2.29.0" />
+      <PackageReference Include="Lightquark.Types" Version="2024.10.11.150" />
+      <PackageReference Include="MongoDB.Driver" Version="2.25.0" />
     </ItemGroup>
 
 

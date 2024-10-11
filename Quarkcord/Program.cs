@@ -361,6 +361,8 @@ public class QuarkcordPlugin : IPlugin
             Filename = a.Filename,
             MimeType = a.ContentType,
             Size = a.Size,
+            Width = a.Width,
+            Height = a.Height,
             Url = new Uri($"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(a.Url)}")
         }).ToArray();
         LqMessage lqMessage;
@@ -472,4 +474,6 @@ public class LqAttachment : Lightquark.Types.Mongo.IAttachment
     public string MimeType { get; set; }
     public string Filename { get; set; }
     public ObjectId FileId { get; set; }
+    public int? Height { get; set; }
+    public int? Width { get; set; }
 }
