@@ -19,7 +19,7 @@ public class QuarkcordPlugin : IPlugin
         Console.WriteLine($"[Quarkcord] {msg.ToString()}");
         return Task.CompletedTask;
     }
-    
+
     private string? _token;
     private string? _botUserId;
     private Lightquark.Types.Mongo.IUser? _user;
@@ -32,7 +32,7 @@ public class QuarkcordPlugin : IPlugin
     private IMongoCollection<MessagePair> MessagePairs => _database.GetCollection<MessagePair>("messages");
     private IMongoCollection<ChannelPair> ChannelPairs => _database.GetCollection<ChannelPair>("channels");
     private List<ChannelPair> _bridgeChannels = null!;
-    
+
     public void Initialize(IEventBus eventBus)
     {
         Task.Run(async () =>
@@ -40,7 +40,8 @@ public class QuarkcordPlugin : IPlugin
             eventBus.Subscribe<BusReadyEvent>(_ => _eventBusGetEvent.Set());
             _eventBusGetEvent.WaitOne();
             _eventBus = eventBus;
-            var filePath = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "lightquark", "quarkcord");
+            var filePath = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "lightquark",
+                "quarkcord");
             string mongoConnectionString;
             string mongoDb;
             if (File.Exists(filePath))
@@ -53,15 +54,19 @@ public class QuarkcordPlugin : IPlugin
             }
             else
             {
-                await File.WriteAllTextAsync(filePath, "INSERT_DISCORD_TOKEN_HERE;INSERT_LQ_BOT_USER_ID_HERE;INSERT_MONGO_CONNECTION_STRING_HERE;INSERT_MONGO_DB_HERE");
+                await File.WriteAllTextAsync(filePath,
+                    "INSERT_DISCORD_TOKEN_HERE;INSERT_LQ_BOT_USER_ID_HERE;INSERT_MONGO_CONNECTION_STRING_HERE;INSERT_MONGO_DB_HERE");
                 _token = "INSERT_DISCORD_TOKEN_HERE";
                 _botUserId = "INSERT_LQ_BOT_USER_ID_HERE";
                 mongoConnectionString = "INSERT_MONGO_CONNECTION_STRING_HERE";
                 mongoDb = "INSERT_MONGO_DB_HERE";
             }
+
             if (_token == "INSERT_DISCORD_TOKEN_HERE") throw new Exception($"Please add discord token to {filePath}");
-            if (_botUserId == "INSERT_LQ_BOT_USER_ID_HERE") throw new Exception($"Please add bot user id to {filePath}");
-            if (mongoConnectionString == "INSERT_MONGO_CONNECTION_STRING_HERE") throw new Exception($"Please add mongo connection string to {filePath}");
+            if (_botUserId == "INSERT_LQ_BOT_USER_ID_HERE")
+                throw new Exception($"Please add bot user id to {filePath}");
+            if (mongoConnectionString == "INSERT_MONGO_CONNECTION_STRING_HERE")
+                throw new Exception($"Please add mongo connection string to {filePath}");
             if (mongoDb == "INSERT_MONGO_DB_HERE") throw new Exception($"Please add mongo db to {filePath}");
 
             _mongoClient = new MongoClient(mongoConnectionString);
@@ -85,7 +90,7 @@ public class QuarkcordPlugin : IPlugin
                     LqId = ObjectId.Empty
                 });
             }
-            
+
             eventBus.Publish(new GetUserMessage
             {
                 UserId = new ObjectId(_botUserId),
@@ -123,152 +128,194 @@ public class QuarkcordPlugin : IPlugin
             _client.MessageUpdated += DiscordMessageUpdated;
             _client.MessageDeleted += DiscordMessageDeleted;
             _client.ReactionAdded += DiscordReactionAdded;
-            
+
             eventBus.Subscribe<MessageCreateEvent>(LqMessageReceived);
             eventBus.Subscribe<MessageDeleteEvent>(LqMessageDeleted);
 
             await _client.StartAsync();
         });
     }
-    
+
     private async void LqMessageDeleted(MessageDeleteEvent deleteEvent)
     {
-        if (_bridgeChannels.All(bc => bc.LqId != deleteEvent.Message.ChannelId)) return;
-        var bridgeChannel = _bridgeChannels.Find(bc => bc.LqId == deleteEvent.Message.ChannelId);
-        if (_client!.GetChannel(bridgeChannel!.DiscordId) is not ITextChannel discordChannel) return;
-        var messagePairCursor = await MessagePairs.FindAsync(mp => mp.LqId == deleteEvent.Message.Id);
-        var messagePair = await messagePairCursor.FirstOrDefaultAsync();
-        if (messagePair == null) return;
-        await discordChannel.DeleteMessageAsync(messagePair.DiscordId);
-        await MessagePairs.DeleteOneAsync(mp => mp.Id == messagePair.Id);
+        try
+        {
+            if (_bridgeChannels.All(bc => bc.LqId != deleteEvent.Message.ChannelId)) return;
+            var bridgeChannel = _bridgeChannels.Find(bc => bc.LqId == deleteEvent.Message.ChannelId);
+            if (_client!.GetChannel(bridgeChannel!.DiscordId) is not ITextChannel discordChannel) return;
+            var messagePairCursor = await MessagePairs.FindAsync(mp => mp.LqId == deleteEvent.Message.Id);
+            var messagePair = await messagePairCursor.FirstOrDefaultAsync();
+            if (messagePair == null) return;
+            await discordChannel.DeleteMessageAsync(messagePair.DiscordId);
+            await MessagePairs.DeleteOneAsync(mp => mp.Id == messagePair.Id);
+        }
+        catch (Exception _)
+        {
+            // Plugin error ignored
+        }
     }
-    
+
     private async void LqMessageReceived(MessageCreateEvent createEvent)
     {
-        if (createEvent.Message.Author!.Id == _user!.Id) return;
-        if (_bridgeChannels.All(bc => bc.LqId != createEvent.Message.ChannelId)) return;
-        var bridgeChannel = _bridgeChannels.Find(bc => bc.LqId == createEvent.Message.ChannelId);
-        if (_client!.GetChannel(bridgeChannel!.DiscordId) is not ITextChannel discordChannel) return;
-        var webhooks = await discordChannel.GetWebhooksAsync();
-        var webhook = webhooks.FirstOrDefault(w => w.Name == $"Quarkcord {_networkInformation?.Name}") 
-                      ?? await discordChannel.CreateWebhookAsync($"Quarkcord {_networkInformation?.Name}");
-        var webhookClient = new Discord.Webhook.DiscordWebhookClient(webhook.Id, webhook.Token);
-        var username =
-            $"{createEvent.Message.Author.Username} via {createEvent.Message.UserAgent} ({_networkInformation!.Name})";
-        if (username.Length > 80)
+        try
         {
-            username = $"{createEvent.Message.Author.Username} ({_networkInformation!.Name})";
-        }
-        if (username.Length > 80)
-        {
-            var toRemove = $" ({_networkInformation!.Name})".Length;
-            username = $"{createEvent.Message.Author.Username[..(80 - toRemove)]} ({_networkInformation!.Name})";
-        }
-        var message = await webhookClient.SendMessageAsync(
-            createEvent.Message.Content?.Length <= 2000 ? createEvent.Message.Content : "A message was sent but it is too long. Please view it on Lightquark", 
-            false, 
-            createEvent.Message.Attachments.Select(a => a.MimeType.StartsWith("image") ?
-                new EmbedBuilder().WithImageUrl(a.Url.ToString()).Build()
-                : new EmbedBuilder().WithTitle($"{a.Filename} ({HumanReadable.BytesToString(a.Size)})").WithUrl(a.Url.ToString()).Build()),
-            username,
-            createEvent.Message.Author.AvatarUriGetter.ToString(), 
-            null, 
-            AllowedMentions.None);
+            if (createEvent.Message.Author!.Id == _user!.Id) return;
+            if (_bridgeChannels.All(bc => bc.LqId != createEvent.Message.ChannelId)) return;
+            var bridgeChannel = _bridgeChannels.Find(bc => bc.LqId == createEvent.Message.ChannelId);
+            if (_client!.GetChannel(bridgeChannel!.DiscordId) is not ITextChannel discordChannel) return;
+            var webhooks = await discordChannel.GetWebhooksAsync();
+            var webhook = webhooks.FirstOrDefault(w => w.Name == $"Quarkcord {_networkInformation?.Name}")
+                          ?? await discordChannel.CreateWebhookAsync($"Quarkcord {_networkInformation?.Name}");
+            var webhookClient = new Discord.Webhook.DiscordWebhookClient(webhook.Id, webhook.Token);
+            var username =
+                $"{createEvent.Message.Author.Username} via {createEvent.Message.UserAgent} ({_networkInformation!.Name})";
+            if (username.Length > 80)
+            {
+                username = $"{createEvent.Message.Author.Username} ({_networkInformation!.Name})";
+            }
 
-        var messagePair = new MessagePair
+            if (username.Length > 80)
+            {
+                var toRemove = $" ({_networkInformation!.Name})".Length;
+                username = $"{createEvent.Message.Author.Username[..(80 - toRemove)]} ({_networkInformation!.Name})";
+            }
+
+            var message = await webhookClient.SendMessageAsync(
+                createEvent.Message.Content?.Length <= 2000
+                    ? createEvent.Message.Content
+                    : "A message was sent but it is too long. Please view it on Lightquark",
+                false,
+                createEvent.Message.Attachments.Select(a => a.MimeType.StartsWith("image")
+                    ? new EmbedBuilder().WithImageUrl(a.Url.ToString()).Build()
+                    : new EmbedBuilder().WithTitle($"{a.Filename} ({HumanReadable.BytesToString(a.Size)})")
+                        .WithUrl(a.Url.ToString()).Build()),
+                username,
+                createEvent.Message.Author.AvatarUriGetter.ToString(),
+                null,
+                AllowedMentions.None);
+
+            var messagePair = new MessagePair
+            {
+                Id = ObjectId.GenerateNewId(),
+                LqId = createEvent.Message.Id,
+                DiscordId = message
+            };
+            await MessagePairs.InsertOneAsync(messagePair);
+        }
+        catch (Exception _)
         {
-            Id = ObjectId.GenerateNewId(),
-            LqId = createEvent.Message.Id,
-            DiscordId = message
-        };
-        await MessagePairs.InsertOneAsync(messagePair);
+            // Ignore plugin error
+        }
     }
 
     private async Task DiscordMessageUpdated(Cacheable<IMessage, ulong> oldMessageParam, SocketMessage messageParam,
         ISocketMessageChannel channelParam)
     {
-        if (messageParam is not SocketUserMessage message) return;
-        if (message.Author.Id == _client!.CurrentUser.Id) return;
-        if (_user == null)
+        try
         {
-            await Log(new LogMessage(LogSeverity.Warning, "Quarkcord", "Message received but bot user is null"));
-            return;
+            if (messageParam is not SocketUserMessage message) return;
+            if (message.Author.Id == _client!.CurrentUser.Id) return;
+            if (_user == null)
+            {
+                await Log(new LogMessage(LogSeverity.Warning, "Quarkcord", "Message received but bot user is null"));
+                return;
+            }
+
+            if (_bridgeChannels.All(bc => bc.DiscordId != message.Channel.Id)) return;
+            var bridgeChannel = _bridgeChannels.Find(bc => bc.DiscordId == message.Channel.Id);
+            var messagePairCursor = await MessagePairs.FindAsync(mp => mp.DiscordId == message.Id);
+            var messagePair = await messagePairCursor.FirstOrDefaultAsync();
+            if (messagePair == null)
+            {
+                // Somehow we didn't have this one, lets bridge it now!
+                await SendOrUpdateLqMessage(message, bridgeChannel!);
+            }
+            else
+            {
+                await SendOrUpdateLqMessage(message, bridgeChannel!, true, messagePair);
+            }
         }
-        if (_bridgeChannels.All(bc => bc.DiscordId != message.Channel.Id)) return;
-        var bridgeChannel = _bridgeChannels.Find(bc => bc.DiscordId == message.Channel.Id);
-        var messagePairCursor = await MessagePairs.FindAsync(mp => mp.DiscordId == message.Id);
-        var messagePair = await messagePairCursor.FirstOrDefaultAsync();
-        if (messagePair == null)
+        catch (Exception _)
         {
-            // Somehow we didn't have this one, lets bridge it now!
-            await SendOrUpdateLqMessage(message, bridgeChannel!);
-        }
-        else
-        {
-            await SendOrUpdateLqMessage(message, bridgeChannel!, true, messagePair);
+            //
         }
     }
-    
-    
+
+
     private async Task DiscordReactionAdded(Cacheable<IUserMessage, ulong> messageParam,
         Cacheable<IMessageChannel, ulong> channelParam, SocketReaction reactionParam)
     {
-        if (_bridgeChannels.All(bc => bc.DiscordId != channelParam.Id)) return;
-        var bridgeChannel = _bridgeChannels.Find(bc => bc.DiscordId == channelParam.Id);
-        var discordMessageId = messageParam.Id;
-        var messagePairCursor = await MessagePairs.FindAsync(m => m.DiscordId == discordMessageId);
-        var messagePair = await messagePairCursor.FirstOrDefaultAsync();
-        if (messagePair == null) return;
-        var message = await messageParam.DownloadAsync();
-        
-        var specialAttributes = new JArray
+        try
         {
-            new JObject
+            if (_bridgeChannels.All(bc => bc.DiscordId != channelParam.Id)) return;
+            var bridgeChannel = _bridgeChannels.Find(bc => bc.DiscordId == channelParam.Id);
+            var discordMessageId = messageParam.Id;
+            var messagePairCursor = await MessagePairs.FindAsync(m => m.DiscordId == discordMessageId);
+            var messagePair = await messagePairCursor.FirstOrDefaultAsync();
+            if (messagePair == null) return;
+            var message = await messageParam.DownloadAsync();
+
+            var specialAttributes = new JArray
             {
-                ["type"] = "reply",
-                ["replyTo"] = messagePair.LqId.ToString()
-            }
-        };
-        
-        _eventBus.Publish(new CreateMessageMessage
+                new JObject
+                {
+                    ["type"] = "reply",
+                    ["replyTo"] = messagePair.LqId.ToString()
+                }
+            };
+
+            _eventBus.Publish(new CreateMessageMessage
+            {
+                Message = new LqMessage
+                {
+                    VirtualAuthors = [_user!],
+                    ChannelId = bridgeChannel!.LqId,
+                    Id = ObjectId.GenerateNewId(),
+                    AuthorId = _user!.Id,
+                    Content = $"{(reactionParam.User.GetValueOrDefault() as SocketGuildUser)?.Nickname
+                                 ?? reactionParam.User.GetValueOrDefault().GlobalName
+                                 ?? reactionParam.User.GetValueOrDefault().Username
+                                 ?? "Someone"} reacted with {reactionParam.Emote}",
+                    UserAgent = "Quarkcord",
+                    Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds(),
+                    Edited = false,
+                    Attachments = [],
+                    SpecialAttributes = specialAttributes
+                }
+            });
+        }
+        catch (Exception _)
         {
-            Message = new LqMessage
-            {
-                VirtualAuthors = [_user!],
-                ChannelId = bridgeChannel!.LqId,
-                Id = ObjectId.GenerateNewId(),
-                AuthorId = _user!.Id,
-                Content = $"{(reactionParam.User.GetValueOrDefault() as SocketGuildUser)?.Nickname 
-                             ?? reactionParam.User.GetValueOrDefault().GlobalName 
-                             ?? reactionParam.User.GetValueOrDefault().Username 
-                             ?? "Someone"} reacted with {reactionParam.Emote}",
-                UserAgent = "Quarkcord",
-                Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds(),
-                Edited = false,
-                Attachments = [],
-                SpecialAttributes = specialAttributes
-                
-            }
-        });
+            // shut up
+        }
     }
-    
-    private async Task DiscordMessageDeleted(Cacheable<IMessage, ulong> messageParam, Cacheable<IMessageChannel, ulong> channelParam)
+
+    private async Task DiscordMessageDeleted(Cacheable<IMessage, ulong> messageParam,
+        Cacheable<IMessageChannel, ulong> channelParam)
     {
-        if (_bridgeChannels.All(bc => bc.DiscordId != channelParam.Id)) return;
-        var discordMessageId = messageParam.Id;
-        var messagePairCursor = await MessagePairs.FindAsync(m => m.DiscordId == discordMessageId);
-        var messagePair = await messagePairCursor.FirstOrDefaultAsync();
-        if (messagePair == null) return;
-        
-        _eventBus.Publish(new DeleteMessageMessage
+        try
         {
-            MessageId = messagePair.LqId
-        });
+            if (_bridgeChannels.All(bc => bc.DiscordId != channelParam.Id)) return;
+            var discordMessageId = messageParam.Id;
+            var messagePairCursor = await MessagePairs.FindAsync(m => m.DiscordId == discordMessageId);
+            var messagePair = await messagePairCursor.FirstOrDefaultAsync();
+            if (messagePair == null) return;
 
-        await MessagePairs.DeleteOneAsync(mp => mp.Id == messagePair.Id);
+            _eventBus.Publish(new DeleteMessageMessage
+            {
+                MessageId = messagePair.LqId
+            });
+
+            await MessagePairs.DeleteOneAsync(mp => mp.Id == messagePair.Id);
+        }
+        catch (Exception _)
+        {
+            // Ignore
+        }
     }
 
-    private async Task SendOrUpdateLqMessage(SocketUserMessage message, ChannelPair bridgeChannel, bool update = false, MessagePair? existingMessagePair = null)
+    private async Task SendOrUpdateLqMessage(SocketUserMessage message, ChannelPair bridgeChannel, bool update = false,
+        MessagePair? existingMessagePair = null)
     {
         if (message.Author.Username.EndsWith($"({_networkInformation!.Name})")) return;
         var specialAttributes = new JArray
@@ -276,8 +323,10 @@ public class QuarkcordPlugin : IPlugin
             new JObject
             {
                 ["type"] = "botMessage",
-                ["username"] = (message.Author as SocketGuildUser)?.Nickname ?? message.Author.GlobalName ?? message.Author.Username,
-                ["avatarUri"] = $"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(message.Author.GetDisplayAvatarUrl())}"
+                ["username"] = (message.Author as SocketGuildUser)?.Nickname ??
+                               message.Author.GlobalName ?? message.Author.Username,
+                ["avatarUri"] =
+                    $"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(message.Author.GetDisplayAvatarUrl())}"
             }
         };
         if (message.ReferencedMessage != null)
@@ -293,6 +342,7 @@ public class QuarkcordPlugin : IPlugin
                 });
             }
         }
+
         var lqMessageId = existingMessagePair?.LqId ?? ObjectId.GenerateNewId();
         var messagePair = existingMessagePair ?? new MessagePair
         {
@@ -304,6 +354,7 @@ public class QuarkcordPlugin : IPlugin
         {
             await MessagePairs.InsertOneAsync(messagePair);
         }
+
         var lqAttachments = message.Attachments.Select(a => new LqAttachment
         {
             FileId = ObjectId.Empty,
@@ -358,7 +409,7 @@ public class QuarkcordPlugin : IPlugin
                 SpecialAttributes = specialAttributes
             };
         }
-        
+
         if (update)
         {
             _eventBus.Publish(new EditMessageMessage
@@ -374,20 +425,28 @@ public class QuarkcordPlugin : IPlugin
             });
         }
     }
-    
+
     private async Task DiscordMessageReceived(SocketMessage messageParam)
     {
-        if (messageParam is not SocketUserMessage message) return;
-        if (message.Author.Id == _client!.CurrentUser.Id) return;
-        if (_user == null)
+        try
         {
-            await Log(new LogMessage(LogSeverity.Warning, "Quarkcord", "Message received but bot user is null"));
-            return;
-        }
-        if (_bridgeChannels.All(bc => bc.DiscordId != message.Channel.Id)) return;
-        var bridgeChannel = _bridgeChannels.Find(bc => bc.DiscordId == message.Channel.Id);
+            if (messageParam is not SocketUserMessage message) return;
+            if (message.Author.Id == _client!.CurrentUser.Id) return;
+            if (_user == null)
+            {
+                await Log(new LogMessage(LogSeverity.Warning, "Quarkcord", "Message received but bot user is null"));
+                return;
+            }
 
-        await SendOrUpdateLqMessage(message, bridgeChannel!);
+            if (_bridgeChannels.All(bc => bc.DiscordId != message.Channel.Id)) return;
+            var bridgeChannel = _bridgeChannels.Find(bc => bc.DiscordId == message.Channel.Id);
+
+            await SendOrUpdateLqMessage(message, bridgeChannel!);
+        }
+        catch (Exception _)
+        {
+            // Plugin error ignor
+        }
     }
 }
 
