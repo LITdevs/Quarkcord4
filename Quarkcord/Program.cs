@@ -5,6 +5,8 @@ using Lightquark.Types;
 using Lightquark.Types.EventBus;
 using Lightquark.Types.EventBus.Events;
 using Lightquark.Types.EventBus.Messages;
+using Lightquark.Types.Federation;
+using Lightquark.Types.Objects;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Newtonsoft.Json.Linq;
@@ -22,7 +24,7 @@ public class QuarkcordPlugin : IPlugin
 
     private string? _token;
     private string? _botUserId;
-    private Lightquark.Types.Mongo.IUser? _user;
+    private IUser<IBaseId> _user;
     private DiscordSocketClient? _client;
     private readonly ManualResetEvent _eventBusGetEvent = new(false);
     private IEventBus _eventBus = null!;
@@ -35,11 +37,27 @@ public class QuarkcordPlugin : IPlugin
 
     public void Initialize(IEventBus eventBus)
     {
+        Console.WriteLine("[Quarkcord] Initialize");
         Task.Run(async () =>
         {
+            Console.WriteLine("[Quarkcord] Subscribing to BusReadyEvent");
             eventBus.Subscribe<BusReadyEvent>(_ => _eventBusGetEvent.Set());
             _eventBusGetEvent.WaitOne();
+            Console.WriteLine("[Quarkcord] BusReadyEvent obtained");
+            _eventBusGetEvent.Reset();
+            Console.WriteLine("[Quarkcord] Retrieving NetworkInformation");
+            eventBus.Publish(new GetNetworkMessage
+            {
+                Callback = network =>
+                {
+                    Console.WriteLine("[Quarkcord] NetworkInformation obtained");
+                    _networkInformation = network;
+                    _eventBusGetEvent.Set();
+                }
+            });
+            _eventBusGetEvent.WaitOne();
             _eventBus = eventBus;
+            Console.WriteLine("[Quarkcord] Loading configuration");
             var filePath = Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "lightquark",
                 "quarkcord");
             string mongoConnectionString;
@@ -81,32 +99,22 @@ public class QuarkcordPlugin : IPlugin
                 {
                     DiscordId = 0,
                     Id = ObjectId.GenerateNewId(),
-                    LqId = ObjectId.Empty
+                    LqId = (new BaseId(Guid.Empty, _networkInformation!.LinkBase)).ToString()
                 });
                 await MessagePairs.InsertOneAsync(new MessagePair
                 {
                     DiscordId = 0,
                     Id = ObjectId.GenerateNewId(),
-                    LqId = ObjectId.Empty
+                    LqId = (new BaseId(Guid.Empty, _networkInformation!.LinkBase)).ToString()
                 });
             }
 
-            eventBus.Publish(new GetUserMessage
+            eventBus.Publish(new GetUserMessage<IBaseId>
             {
-                UserId = new ObjectId(_botUserId),
+                UserId = new BaseId(_botUserId),
                 Callback = user =>
                 {
                     _user = user;
-                    _eventBusGetEvent.Set();
-                }
-            });
-            _eventBusGetEvent.WaitOne();
-            _eventBusGetEvent.Reset();
-            eventBus.Publish(new GetNetworkMessage
-            {
-                Callback = network =>
-                {
-                    _networkInformation = network;
                     _eventBusGetEvent.Set();
                 }
             });
@@ -130,6 +138,7 @@ public class QuarkcordPlugin : IPlugin
             _client.ReactionAdded += DiscordReactionAdded;
 
             eventBus.Subscribe<MessageCreateEvent>(LqMessageReceived);
+            // eventBus.Subscribe<MessageUpdateEvent>(LqMessageUpdated);
             eventBus.Subscribe<MessageDeleteEvent>(LqMessageDeleted);
 
             await _client.StartAsync();
@@ -140,12 +149,13 @@ public class QuarkcordPlugin : IPlugin
     {
         try
         {
-            if (_bridgeChannels.All(bc => bc.LqId != deleteEvent.Message.ChannelId)) return;
-            var bridgeChannel = _bridgeChannels.Find(bc => bc.LqId == deleteEvent.Message.ChannelId);
+            if (_bridgeChannels.All(bc => bc.LqId != deleteEvent.Message.ChannelId.ToString())) return;
+            var bridgeChannel = _bridgeChannels.Find(bc => bc.LqId == deleteEvent.Message.ChannelId.ToString());
             if (_client!.GetChannel(bridgeChannel!.DiscordId) is not ITextChannel discordChannel) return;
-            var messagePairCursor = await MessagePairs.FindAsync(mp => mp.LqId == deleteEvent.Message.Id);
+            var messagePairCursor = await MessagePairs.FindAsync(mp => mp.LqId == deleteEvent.Message.Id.ToString());
             var messagePair = await messagePairCursor.FirstOrDefaultAsync();
             if (messagePair == null) return;
+            if (messagePair.NoDelete) return;
             await discordChannel.DeleteMessageAsync(messagePair.DiscordId);
             await MessagePairs.DeleteOneAsync(mp => mp.Id == messagePair.Id);
         }
@@ -155,29 +165,46 @@ public class QuarkcordPlugin : IPlugin
         }
     }
 
+    // private async void LqMessageUpdated
+    
     private async void LqMessageReceived(MessageCreateEvent createEvent)
     {
         try
         {
-            if (createEvent.Message.Author!.Id == _user!.Id) return;
-            if (_bridgeChannels.All(bc => bc.LqId != createEvent.Message.ChannelId)) return;
-            var bridgeChannel = _bridgeChannels.Find(bc => bc.LqId == createEvent.Message.ChannelId);
+            if (createEvent.Message.AuthorId.Id == _user.Id.Id && createEvent.Message.AuthorId.Network == _user.Id.Network) return;
+            await Console.Error.WriteLineAsync("[Quarkcord] Got a message event!");
+            IUser<IBaseId>? author = null;
+            var getEvent = new ManualResetEventSlim(false);
+            _eventBus.Publish(new GetUserMessage<IBaseId>
+            {
+                UserId = createEvent.Message.AuthorId,
+                Callback = user =>
+                {
+                    Console.WriteLine("[Quarkcord] Got author information");
+                    author = user;
+                    getEvent.Set();
+                }
+            });
+            getEvent.Wait(5000);
+            Console.WriteLine($"[Quarkcord] Author data? {author == null}");
+            if (_bridgeChannels.All(bc => bc.LqId != createEvent.Message.ChannelId.ToString())) return;
+            var bridgeChannel = _bridgeChannels.Find(bc => bc.LqId == createEvent.Message.ChannelId.ToString());
             if (_client!.GetChannel(bridgeChannel!.DiscordId) is not ITextChannel discordChannel) return;
             var webhooks = await discordChannel.GetWebhooksAsync();
             var webhook = webhooks.FirstOrDefault(w => w.Name == $"Quarkcord {_networkInformation?.Name}")
                           ?? await discordChannel.CreateWebhookAsync($"Quarkcord {_networkInformation?.Name}");
             var webhookClient = new Discord.Webhook.DiscordWebhookClient(webhook.Id, webhook.Token);
             var username =
-                $"{createEvent.Message.Author.Username} via {createEvent.Message.UserAgent} ({_networkInformation!.Name})";
+                $"{author.Username} via {createEvent.Message.UserAgent} ({_networkInformation!.Name})";
             if (username.Length > 80)
             {
-                username = $"{createEvent.Message.Author.Username} ({_networkInformation!.Name})";
+                username = $"{author.Username} ({_networkInformation!.Name})";
             }
 
             if (username.Length > 80)
             {
                 var toRemove = $" ({_networkInformation!.Name})".Length;
-                username = $"{createEvent.Message.Author.Username[..(80 - toRemove)]} ({_networkInformation!.Name})";
+                username = $"{author.Username[..(80 - toRemove)]} ({_networkInformation!.Name})";
             }
 
             var message = await webhookClient.SendMessageAsync(
@@ -186,24 +213,26 @@ public class QuarkcordPlugin : IPlugin
                     : "A message was sent but it is too long. Please view it on Lightquark",
                 false,
                 createEvent.Message.Attachments.Select(a => a.MimeType.StartsWith("image")
-                    ? new EmbedBuilder().WithImageUrl(a.Url.ToString()).Build()
+                    ? new EmbedBuilder().WithImageUrl($"{_networkInformation.CdnBaseUrl}/{a.FileId}").Build()
                     : new EmbedBuilder().WithTitle($"{a.Filename} ({HumanReadable.BytesToString(a.Size)})")
-                        .WithUrl(a.Url.ToString()).Build()),
+                        .WithUrl($"{_networkInformation.CdnBaseUrl}/{a.FileId}").Build()),
                 username,
-                createEvent.Message.Author.AvatarUriGetter.ToString(),
+                $"{_networkInformation.CdnBaseUrl}/{author.AvatarFileId}",
                 null,
                 AllowedMentions.None);
 
             var messagePair = new MessagePair
             {
                 Id = ObjectId.GenerateNewId(),
-                LqId = createEvent.Message.Id,
-                DiscordId = message
+                LqId = createEvent.Message.Id.ToString()!,
+                DiscordId = message,
+                NoDelete = author.Username.ToLowerInvariant().Contains("hakase")
             };
             await MessagePairs.InsertOneAsync(messagePair);
         }
-        catch (Exception _)
+        catch (Exception ex)
         {
+            await Log(new LogMessage(LogSeverity.Warning, "Quarkcord", "Error :(", ex));
             // Ignore plugin error
         }
     }
@@ -264,14 +293,13 @@ public class QuarkcordPlugin : IPlugin
                 }
             };
 
-            _eventBus.Publish(new CreateMessageMessage
+            _eventBus.Publish(new CreateMessageMessage<IBaseId, IAttachment<IBaseId>>
             {
                 Message = new LqMessage
                 {
-                    VirtualAuthors = [_user!],
-                    ChannelId = bridgeChannel!.LqId,
-                    Id = ObjectId.GenerateNewId(),
-                    AuthorId = _user!.Id,
+                    ChannelId = new BaseId(bridgeChannel!.LqId),
+                    Id = new BaseId(Guid.NewGuid(), _networkInformation.LinkBase),
+                    AuthorId = new BaseId(_user!.Id.Id, _user!.Id.Network),
                     Content = $"{(reactionParam.User.GetValueOrDefault() as SocketGuildUser)?.Nickname
                                  ?? reactionParam.User.GetValueOrDefault().GlobalName
                                  ?? reactionParam.User.GetValueOrDefault().Username
@@ -301,9 +329,9 @@ public class QuarkcordPlugin : IPlugin
             var messagePair = await messagePairCursor.FirstOrDefaultAsync();
             if (messagePair == null) return;
 
-            _eventBus.Publish(new DeleteMessageMessage
+            _eventBus.Publish(new DeleteMessageMessage<IBaseId>
             {
-                MessageId = messagePair.LqId
+                MessageId = new BaseId(messagePair.LqId)
             });
 
             await MessagePairs.DeleteOneAsync(mp => mp.Id == messagePair.Id);
@@ -343,12 +371,12 @@ public class QuarkcordPlugin : IPlugin
             }
         }
 
-        var lqMessageId = existingMessagePair?.LqId ?? ObjectId.GenerateNewId();
+        var lqMessageId = existingMessagePair?.LqId != null ? new BaseId(existingMessagePair?.LqId) : new BaseId(Guid.NewGuid(), _networkInformation.LinkBase);
         var messagePair = existingMessagePair ?? new MessagePair
         {
             DiscordId = message.Id,
             Id = ObjectId.GenerateNewId(),
-            LqId = lqMessageId
+            LqId = lqMessageId.ToString()
         };
         if (!update)
         {
@@ -357,13 +385,13 @@ public class QuarkcordPlugin : IPlugin
 
         var lqAttachments = message.Attachments.Select(a => new LqAttachment
         {
-            FileId = ObjectId.Empty,
+            FileId = new BaseId(Guid.NewGuid(), _networkInformation.LinkBase),
             Filename = a.Filename,
             MimeType = a.ContentType,
             Size = a.Size,
             Width = a.Width,
             Height = a.Height,
-            Url = new Uri($"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(a.Url)}")
+            OverrideUri = new Uri($"{_networkInformation!.CdnBaseUrl}/external/{HttpUtility.UrlEncode(a.Url)}")
         }).ToArray();
         LqMessage lqMessage;
         if (message.Attachments.Count == 0 && message.Content.Length == 0)
@@ -378,12 +406,11 @@ public class QuarkcordPlugin : IPlugin
             lqMessage = new LqMessage
             {
                 Id = lqMessageId,
-                AuthorId = _user!.Id,
+                AuthorId = new BaseId(_user!.Id.Id, _user!.Id.Network),
                 Content = "Discord message with unsupported content",
-                ChannelId = bridgeChannel!.LqId,
+                ChannelId = new BaseId(bridgeChannel!.LqId),
                 UserAgent = "Quarkcord",
                 Timestamp = message.Timestamp.ToUnixTimeMilliseconds(),
-                VirtualAuthors = [_user],
                 Edited = update,
                 Attachments = [],
                 SpecialAttributes = specialAttributes
@@ -400,12 +427,11 @@ public class QuarkcordPlugin : IPlugin
             lqMessage = new LqMessage
             {
                 Id = lqMessageId,
-                AuthorId = _user!.Id,
+                AuthorId = new BaseId(_user!.Id.Id, _user!.Id.Network),
                 Content = message.Content,
-                ChannelId = bridgeChannel!.LqId,
+                ChannelId = new BaseId(bridgeChannel!.LqId),
                 UserAgent = "Quarkcord",
                 Timestamp = message.Timestamp.ToUnixTimeMilliseconds(),
-                VirtualAuthors = [_user],
                 Edited = update,
                 Attachments = lqAttachments,
                 SpecialAttributes = specialAttributes
@@ -414,14 +440,14 @@ public class QuarkcordPlugin : IPlugin
 
         if (update)
         {
-            _eventBus.Publish(new EditMessageMessage
+            _eventBus.Publish(new EditMessageMessage<IBaseId, IAttachment<IBaseId>>
             {
                 Message = lqMessage
             });
         }
         else
         {
-            _eventBus.Publish(new CreateMessageMessage
+            _eventBus.Publish(new CreateMessageMessage<IBaseId, IAttachment<IBaseId>>
             {
                 Message = lqMessage
             });
@@ -452,28 +478,60 @@ public class QuarkcordPlugin : IPlugin
     }
 }
 
-public class LqMessage : Lightquark.Types.Mongo.IMessage
+public class LqMessage : IMessage<BaseId, LqAttachment>, IMessage<IBaseId, IAttachment<IBaseId>>
 {
-    public ObjectId Id { get; set; }
-    public ObjectId AuthorId { get; set; }
+    private ICollection<IAttachment<IBaseId>> _attachments;
+    public BaseId Id { get; set; }
+    IBaseId IMessage<IBaseId, IAttachment<IBaseId>>.AuthorId
+    {
+        get => AuthorId;
+        set => AuthorId = new BaseId(value.Id, value.Network);
+    }
+
+    IBaseId IMessage<IBaseId, IAttachment<IBaseId>>.ChannelId
+    {
+        get => ChannelId;
+        set => ChannelId = new BaseId(value.Id, value.Network);
+    }
+
+    IBaseId IMessage<IBaseId, IAttachment<IBaseId>>.Id
+    {
+        get => Id;
+        set => Id = new BaseId(value.Id, value.Network);
+    }
+
+    public BaseId AuthorId { get; set; }
     public string? Content { get; set; }
-    public ObjectId ChannelId { get; set; }
+    public BaseId ChannelId { get; set; }
     public string UserAgent { get; set; }
     public long Timestamp { get; set; }
     public bool Edited { get; set; }
-    public Lightquark.Types.Mongo.IAttachment[] Attachments { get; set; }
+
+    ICollection<IAttachment<IBaseId>> IMessage<IBaseId, IAttachment<IBaseId>>.Attachments
+    {
+        get => new List<IAttachment<IBaseId>>(Attachments);
+        set => throw new NotImplementedException();  // idk if the following would work: Attachments = value.Select(a => (Attachment)a).ToList();
+    }
+
+    public ICollection<LqAttachment> Attachments { get; set; }
     public JArray SpecialAttributes { get; set; }
-    public Lightquark.Types.Mongo.IUser? Author => VirtualAuthors?.FirstOrDefault();
-    public Lightquark.Types.Mongo.IUser[]? VirtualAuthors { get; set; }
 }
 
-public class LqAttachment : Lightquark.Types.Mongo.IAttachment
+public class LqAttachment : IAttachment<BaseId>, IAttachment<IBaseId>
 {
-    public Uri Url { get; set; }
     public long Size { get; set; }
     public string MimeType { get; set; }
     public string Filename { get; set; }
-    public ObjectId FileId { get; set; }
+    public BaseId FileId { get; set; }
+
+    public Uri? OverrideUri { get; set; }
+
+    IBaseId IAttachment<IBaseId>.FileId
+    {
+        get => FileId;
+        set => FileId = new BaseId(value.Id, value.Network);
+    }
+
     public int? Height { get; set; }
     public int? Width { get; set; }
 }

@@ -7,5 +7,6 @@ public class MessagePair
 {
     [BsonId] public ObjectId Id;
     public ulong DiscordId;
-    public ObjectId LqId;
+    public string LqId;
+    public bool NoDelete = false;
 }

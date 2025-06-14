@@ -7,5 +7,5 @@ public class ChannelPair
 {
     [BsonId] public ObjectId Id;
     public ulong DiscordId;
-    public ObjectId LqId;
+    public string LqId;
 }

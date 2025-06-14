@@ -1,14 +1,20 @@
-﻿using Lightquark.Types.Mongo;
-using MongoDB.Bson;
+﻿using Lightquark.Types.Federation;
+using Lightquark.Types.Objects;
 
 namespace Quarkcord.Objects;
 
-public class LqUser : IUser
+public class LqUser : IUser<BaseId>, IUser<IBaseId>
 {
-    public ObjectId Id { get; set; }
+    public BaseId Id { get; set; }
 
     public required byte[] PasswordHash { get; init; }
-    
+
+    IBaseId IUser<IBaseId>.Id
+    {
+        get => Id;
+        set => Id = new BaseId(value.Id, value.Network);
+    }
+
     public required string Email { get; set; }
     
     public required byte[] Salt { get; init; }
@@ -22,18 +28,19 @@ public class LqUser : IUser
     public bool SecretThirdThing { get; set; }
     
     public string? Pronouns { get; set; }
+    IBaseId? IUser<IBaseId>.AvatarFileId
+    {
+        get => AvatarFileId;
+        set => AvatarFileId = value != null ? new BaseId(value.Id, value.Network) : null;
+    }
 
-    public IStatus? Status => null;
+    public BaseId? AvatarFileId { get; set; }
 
-    public required Uri AvatarUri { get; set; }
-
-    public Uri AvatarUriGetter => AvatarUri;
-    
-    public IUser Safe => new LqUser 
+    public IUser<IBaseId> Safe => new LqUser 
     {
         Id = Id,
         Username = Username,
-        AvatarUri = AvatarUri,
+        AvatarFileId = AvatarFileId,
         IsBot = IsBot,
         Admin = Admin,
         SecretThirdThing = SecretThirdThing,
